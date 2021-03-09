@@ -21,7 +21,17 @@ class NN(tf.keras.Model):
         #           - tf.keras.initializers.GlorotNormal
         #           - tf.keras.initializers.he_uniform or tf.keras.initializers.he_normal
 
+        # create the initializer
+        initializer = tf.keras.initializers.GlorotUniform()
+        layer_size = 32
 
+        # initialize the first layer
+        self.W1 = tf.Variable(initializer(shape=(in_size, layer_size)), name="weights1")
+        self.b1 = tf.Variable(tf.zeros([layer_size,]), name="bias1")
+
+        # initialize the second layer
+        self.W2 = tf.Variable(initializer(shape=(layer_size, out_size)), name="weights2")
+        self.b2 = tf.Variable(tf.zeros([out_size,]), name="bias2")
 
         ########## Your code ends here ##########
 
@@ -30,9 +40,13 @@ class NN(tf.keras.Model):
         ######### Your code starts here #########
         # We want to perform a forward-pass of the network. Using the weights and biases, this function should give the network output for x where:
         # x is a (? x |O|) tensor that keeps a batch of observations
+        # perform the first layer of calculation with tanh activation
+        layer1 = tf.math.tanh(tf.add(tf.matmul(x, self.W1), self.b1))
 
+        # perform the second layer of calculation, which will be our output
+        output = tf.math.tanh(tf.add(tf.matmul(layer1, self.W2), self.b2))
 
-
+        return output
         ########## Your code ends here ##########
 
 
@@ -44,8 +58,20 @@ def loss(y_est, y):
     # - y is the actions the expert took for the corresponding batch of observations
     # At the end your code should return the scalar loss value.
     # HINT: Remember, you can penalize steering (0th dimension) and throttle (1st dimension) unequally
+    # setup scalars to penalize the action errors differently
+    weights = [10.0, 0.5]
 
+    # set up loss list for each dimension
+    losses = [0, 0]
 
+    # calculate loss for each dimension
+    for i in range(len(weights)):
+        # calculate the l2-norm loss for each element, multiplied by appropriate weight
+        loss_vec = tf.math.scalar_mul(weights[i], tf.math.squared_difference(y_est[:, i], y[:, i]))
+        losses[i] = tf.reduce_mean(loss_vec)
+
+    # add the two losses for our final scalar loss
+    return sum(losses)
 
     ########## Your code ends here ##########
     
@@ -77,8 +103,19 @@ def nn(data, args):
         # 4. Run an optimization step on the weights.
         # Helpful Functions: tf.GradientTape(), tf.GradientTape.gradient(), tf.keras.Optimizer.apply_gradients
         # HINT: You did the exact same thing in Homework 1! It is just the networks weights and biases that are different.
-        
-        
+        # setup the gradient tape
+        with tf.GradientTape() as tape:
+            # make a forward pass
+            y_est = nn_model.call(x)
+
+            # calculate loss for output of the forward pass
+            current_loss = loss(y_est, y)
+
+        # calculate the gradient for all weights based on the loss
+        grads = tape.gradient(current_loss, nn_model.trainable_variables)
+
+        # run an optimization step on the weights
+        optimizer.apply_gradients(zip(grads, nn_model.trainable_variables))
 
         ########## Your code ends here ##########
 

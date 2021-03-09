@@ -8,6 +8,8 @@ from gym_carlo.envs.interactive_controllers import KeyboardController
 from scipy.stats import multivariate_normal
 from train_ildist import NN
 from utils import *
+import tensorflow_probability as tfp
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -56,7 +58,39 @@ if __name__ == '__main__':
             # - action (1 x 2 numpy array) is the current action the user took when the observation is obs
             # The code should set a variable called "probs" which is list keeping the probabilities associated with goals[scenario_name], respectively.
             # HINT: multivariate_normal from scipy.stats might be useful, which is already imported. Or you can implement it yourself, too.
+            # create the empty probs list
+            probs = []
+            prob_sum = 0
 
+            # create the uniform distribution for P(g | o)
+            prob_goal_uniform = 1. / len(goals[scenario_name])
+
+            # loop through the goals in the current scenario
+            for goal in goals[scenario_name]:
+                # get the model for the current goal
+                model = nn_models[goal]
+
+                # get the model mu and covariance matrix for the current observation
+                output = model.call(obs)
+                mean_vec = output[:, :2].numpy().flatten()
+                L = tfp.math.fill_triangular(output[:, 2:]).numpy().reshape((2,2))
+                cov_mat = L * np.transpose(L)
+
+                # create the multivariate normal distribution from our model parameters
+                mvn = multivariate_normal(mean=mean_vec, cov=cov_mat)
+
+                # get the probability of the current action to give us P(a | o, g)
+                prob_action = mvn.pdf(action)
+
+                # calculate the probability numerator and append to the list (will divide by denom after loop)
+                prob_numerator = prob_action * prob_goal_uniform
+                probs.append(prob_numerator)
+
+                # add the prob_action to the running sum of prob_sum to act as our eventual probability denominator
+                prob_sum += prob_action
+
+            # once we're done looping through all the goals, divide all the probabilities by the prob sum
+            probs[:] = [x / prob_sum for x in probs]
 
             ########## Your code ends here ##########
             

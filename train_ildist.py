@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf1
 import tensorflow.compat.v2 as tf
 from tensorflow_probability import distributions as tfd
+import tensorflow_probability as tfp
 import argparse
 from utils import *
 
@@ -22,9 +23,22 @@ class NN(tf.keras.Model):
         #           - tf.keras.initializers.GlorotUniform (supposedly equivalent to the previous one)
         #           - tf.keras.initializers.GlorotNormal
         #           - tf.keras.initializers.he_uniform or tf.keras.initializers.he_normal
-        
-        
-        
+
+        # get the true output for our function (2 means and 3 values for our lower triangular matrix)
+        true_output_size = int(out_size * (out_size + 1) / 2 + out_size)
+
+        # create the initializer
+        initializer = tf.keras.initializers.GlorotNormal()
+        layer_size = 8
+
+        # initialize the first layer
+        self.W1 = tf.Variable(initializer(shape=(in_size, layer_size)), name="weights1")
+        self.b1 = tf.Variable(tf.zeros([layer_size, ]), name="bias1")
+
+        # initialize the second layer
+        self.W2 = tf.Variable(initializer(shape=(layer_size, true_output_size)), name="weights2")
+        self.b2 = tf.Variable(tf.zeros([true_output_size, ]), name="bias2")
+
         ########## Your code ends here ##########
 
     def call(self, x):
@@ -33,9 +47,12 @@ class NN(tf.keras.Model):
         # We want to perform a forward-pass of the network. Using the weights and biases, this function should give the network output for x where:
         # x is a (? x |O|) tensor that keeps a batch of observations
         # IMPORTANT: First two columns of the output tensor must correspond to the mean vector!
-        
-        
-        
+        layer1 = tf.math.tanh(tf.add(tf.matmul(x, self.W1), self.b1))
+
+        # perform the second layer of calculation, our output
+        output = tf.add(tf.matmul(layer1, self.W2), self.b2)
+
+        return output
         ########## Your code ends here ##########
 
 
@@ -48,10 +65,26 @@ def loss(y_est, y):
     # - y is the actions the expert took for the corresponding batch of observations
     # At the end your code should return the scalar loss value.
     # HINT: You may find the classes of tensorflow_probability.distributions (imported as tfd) useful.
-    #       In particular, we used MultivariateNormalTriL, but it is not the only way.
-    
-    
-    
+    # In particular, you can use MultivariateNormalFullCovariance or MultivariateNormalTriL, but they are not the only way.
+    # extract the mean vector from the network output
+    mean_vec = y_est[:, :2]
+
+    # extract the lower triangular matrix from the remaining network output
+    L = tfp.math.fill_triangular(y_est[:, 2:])
+
+    # calculate the covariance matrix via Cholesky decomposition with epsilon identity addition to ensure invertibility
+    S = tf.matmul(L, tf.transpose(L, perm=[0, 2, 1])) + tf.scalar_mul(1e-6, tf.eye(tf.shape(L)[1]))
+
+    # create the normal distribution object
+    mvn = tfd.MultivariateNormalFullCovariance(loc=mean_vec, covariance_matrix=S)
+
+    # for all the data generate the distribution based on the action
+    loss_vec = tf.scalar_mul(-1., mvn.log_prob(y))
+
+    # now take the average of the negative log likelihoods to get the negative mean log likelihood
+    loss_val = tf.reduce_mean(loss_vec)
+
+    return loss_val
     ########## Your code ends here ##########
 
 
@@ -82,9 +115,20 @@ def nn(data, args):
         # 4. Run an optimization step on the weights.
         # Helpful Functions: tf.GradientTape(), tf.GradientTape.gradient(), tf.keras.Optimizer.apply_gradients
         # HINT: You did the exact same thing in Homework 1! It is just the networks weights and biases that are different.
-       
-       
-       
+        # setup the gradient tape
+        with tf.GradientTape() as tape:
+            # make a forward pass
+            y_est = nn_model.call(x)
+
+            # calculate loss for output of the forward pass
+            current_loss = loss(y_est, y)
+
+        # calculate the gradient for all weights based on the loss
+        grads = tape.gradient(current_loss, nn_model.trainable_variables)
+
+        # run an optimization step on the weights
+        optimizer.apply_gradients(zip(grads, nn_model.trainable_variables))
+
         ########## Your code ends here ##########
 
         train_loss(current_loss)
@@ -93,6 +137,7 @@ def nn(data, args):
     def train(train_data):
         for x, y in train_data:
             train_step(x, y)
+
 
 
     train_data = tf.data.Dataset.from_tensor_slices((data['x_train'], data['y_train'])).shuffle(100000).batch(params['train_batch_size'])

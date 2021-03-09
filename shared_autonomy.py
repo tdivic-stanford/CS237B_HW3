@@ -8,6 +8,8 @@ from gym_carlo.envs.interactive_controllers import KeyboardController
 from scipy.stats import multivariate_normal
 from train_ildist import NN
 from utils import *
+import tensorflow_probability as tfp
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -58,8 +60,30 @@ if __name__ == '__main__':
             # - max_steering and max_throttle are the constraints, i.e. np.abs(a_robot[0]) <= max_steering and np.abs(a_robot[1]) <= max_throttle must be satisfied.
             # At the end, your code should set a_robot variable as a 1x2 numpy array that consists of steering and throttle values, respectively
             # HINT: You can use np.clip to threshold a_robot with respect to the magnitude constraints
+            # create a running sum
+            a_robot = 0
 
+            # loop through the goals
+            for idx, goal in enumerate(goals[scenario_name]):
+                # calculate the probability of the goal using an average over the scores
+                P_g = np.mean(scores[:, idx])
 
+                # get the optimal action for the specified goal
+                opt_action = optimal_action[goal]
+
+                # get the mixed density network for the current goal
+                model = nn_models[goal]
+
+                # get the mean vector, which will also be the summation over human actions
+                output = model.call(obs)
+                mean_vec = output[:, :2].numpy().flatten()
+
+                # now calculate the contribution from the current goal and add to the robot action
+                a_robot += (P_g * (opt_action - mean_vec)).flatten()
+
+            # clip the robot action
+            a_robot[0] = np.clip(np.abs(a_robot[0]), None, max_steering)
+            a_robot[1] = np.clip(np.abs(a_robot[1]), None, max_throttle)
 
             ########## Your code ends here ##########
             
@@ -75,7 +99,39 @@ if __name__ == '__main__':
             # - a_human (1 x 2 numpy array) is the current action the user took when the observation is obs
             # At the end, your code should set probs variable as a 1 x |G| numpy array that consists of the probability of each goal under obs and a_human
             # HINT: This should be very similar to the part in intent_inference.py 
+            # create the empty probs list
+            probs = []
+            prob_sum = 0
 
+            # create the uniform distribution for P(g | o)
+            prob_goal_uniform = 1. / len(goals[scenario_name])
+
+            # loop through the goals in the current scenario
+            for goal in goals[scenario_name]:
+                # get the model for the current goal
+                model = nn_models[goal]
+
+                # get the model mu and covariance matrix for the current observation
+                output = model.call(obs)
+                mean_vec = output[:, :2].numpy().flatten()
+                L = tfp.math.fill_triangular(output[:, 2:]).numpy().reshape((2, 2))
+                cov_mat = L * np.transpose(L)
+
+                # create the multivariate normal distribution from our model parameters
+                mvn = multivariate_normal(mean=mean_vec, cov=cov_mat)
+
+                # get the probability of the current action to give us P(a | o, g)
+                prob_action = mvn.pdf(a_human)
+
+                # calculate the probability numerator and append to the list (will divide by denom after loop)
+                prob_numerator = prob_action * prob_goal_uniform
+                probs.append(prob_numerator)
+
+                # add the prob_action to the running sum of prob_sum to act as our eventual probability denominator
+                prob_sum += prob_action
+
+            # once we're done looping through all the goals, divide all the probabilities by the prob sum
+            probs[:] = [x / prob_sum for x in probs]
 
 
             ########## Your code ends here ##########
